@@ -24,6 +24,8 @@ def command_start(args):
 
     if args.upstream:
         os.environ["UPSTREAM_BASE_URL"] = args.upstream
+    if args.fallback:
+        os.environ["FALLBACK_BASE_URL"] = args.fallback
     if args.api_key:
         os.environ["UPSTREAM_API_KEY"] = args.api_key
 
@@ -137,6 +139,13 @@ def command_status(args):
     except Exception:
         print(f"  Local Proxy Status: STOPPED (run 'nodiguard start' to activate)")
 
+def command_cf_audit(args):
+    """Probes and diagnoses Cloudflare edge health, 301 redirects, and 502 errors."""
+    from .cf_sentinel import CloudflareSentinel
+    sentinel = CloudflareSentinel(args.url)
+    report = sentinel.probe_edge()
+    sentinel.print_report(report)
+
 def main():
     parser = argparse.ArgumentParser(
         prog="nodiguard",
@@ -150,6 +159,7 @@ def main():
     start_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
     start_parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
     start_parser.add_argument("--upstream", help="Upstream LLM Base URL (default: https://api.openai.com/v1)")
+    start_parser.add_argument("--fallback", help="Fallback Base URL on upstream failure (e.g. http://192.168.0.188:8090)")
     start_parser.add_argument("--api-key", help="Upstream API key")
 
     # Scan
@@ -164,6 +174,10 @@ def main():
     # Status
     subparsers.add_parser("status", help="Show system memory and local proxy status")
 
+    # Cloudflare Edge Audit
+    cf_parser = subparsers.add_parser("cf-audit", help="Probe and diagnose Cloudflare edge health, 301 redirects, and 502 errors")
+    cf_parser.add_argument("--url", default="https://ai.iotservices.my", help="Cloudflare edge URL to audit (default: https://ai.iotservices.my)")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -177,6 +191,8 @@ def main():
         command_optimize(args)
     elif args.command == "status":
         command_status(args)
+    elif args.command == "cf-audit":
+        command_cf_audit(args)
 
 if __name__ == "__main__":
     main()

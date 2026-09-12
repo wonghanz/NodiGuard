@@ -113,6 +113,7 @@ class NodiProxyHandler(BaseHTTPRequestHandler):
 
         # 2. Forward to Upstream LLM Gateway
         upstream_url = os.environ.get("UPSTREAM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        fallback_url = os.environ.get("FALLBACK_BASE_URL", "").rstrip("/")
         upstream_key = os.environ.get("UPSTREAM_API_KEY", "")
 
         # Fallback to Authorization header passed from IDE if UPSTREAM_API_KEY not in env
@@ -125,42 +126,64 @@ class NodiProxyHandler(BaseHTTPRequestHandler):
             "Authorization": f"Bearer {upstream_key}" if upstream_key else ""
         }
 
-        try:
-            # ZERO BLIND FOLLOW: Set allow_redirects=False to prevent prompt/token exfiltration on 30x hijacks
-            resp = requests.post(
-                f"{upstream_url}/chat/completions",
+        def _forward_call(target_base: str):
+            r = requests.post(
+                f"{target_base}/chat/completions",
                 json=payload,
                 headers=headers,
                 timeout=60,
                 allow_redirects=False
             )
+            # Detect suspicious redirect
+            if r.is_redirect or r.status_code in (301, 302, 303, 307, 308):
+                loc = r.headers.get("Location", "unknown")
+                return False, r, f"HTTP {r.status_code} redirecting to '{loc}'", "upstream_redirect_blocked", loc
+            # Detect CDN edge error or gateway failure
+            if r.status_code in (502, 503, 504):
+                return False, r, f"Edge Error HTTP {r.status_code}", "edge_gateway_error", None
+            # Validate JSON content type
+            ct = r.headers.get("Content-Type", "")
+            if "application/json" not in ct:
+                return False, r, f"Non-JSON Content-Type ('{ct}')", "non_json_upstream_response", None
+            return True, r, "Success", "ok", None
 
-            # Detect and neutralize suspicious 30x redirect hijacking
-            if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
-                redirect_target = resp.headers.get("Location", "unknown")
-                self._send_json(502, {
-                    "error": {
-                        "message": f"[NODIGUARD HIJACK SHIELD]: Upstream returned HTTP {resp.status_code} redirecting to '{redirect_target}'. Request blocked to prevent unauthorized prompt/token exfiltration.",
-                        "type": "security_violation",
-                        "code": "upstream_redirect_blocked",
-                        "target_location": redirect_target
-                    }
-                })
-                return
+        # 1. Attempt Primary Upstream
+        resp = None
+        success, resp, reason, err_code, loc = False, None, "", "", None
 
-            # Validate upstream content type: catch Cloudflare edge HTML error/redirect pages
-            content_type = resp.headers.get("Content-Type", "")
-            if "application/json" not in content_type:
-                self._send_json(502, {
-                    "error": {
-                        "message": f"[NODIGUARD GATEWAY ERROR]: Upstream returned non-JSON response ('{content_type}'). Possible CDN edge error or unverified landing page.",
-                        "type": "upstream_protocol_error",
-                        "code": "non_json_upstream_response",
-                        "status_code": resp.status_code
-                    }
-                })
-                return
+        try:
+            success, resp, reason, err_code, loc = _forward_call(upstream_url)
+        except Exception as e:
+            reason = str(e)
+            err_code = "upstream_connection_failed"
 
+        # 2. Seamless Failover to Fallback Node if primary failed
+        if not success and fallback_url:
+            print(f"[*] [NODIGUARD FAILOVER] Primary ({upstream_url}) failed: {reason}. Failing over to {fallback_url}...")
+            try:
+                fb_success, fb_resp, fb_reason, fb_code, _ = _forward_call(fallback_url)
+                if fb_success:
+                    resp = fb_resp
+                    success = True
+            except Exception as e:
+                print(f"[!] [NODIGUARD FAILOVER] Fallback failed: {e}")
+
+        # 3. If still unsuccessful, return structured security / gateway error
+        if not success:
+            err_msg = f"[NODIGUARD GATEWAY ERROR]: Upstream failed ({reason})."
+            if loc:
+                err_msg = f"[NODIGUARD HIJACK SHIELD]: Upstream returned HTTP redirect to '{loc}'. Request blocked to prevent unauthorized prompt/token exfiltration."
+            self._send_json(502, {
+                "error": {
+                    "message": err_msg,
+                    "type": "security_violation" if loc else "upstream_gateway_error",
+                    "code": err_code,
+                    "target_location": loc
+                }
+            })
+            return
+
+        try:
             resp_data = resp.json()
         except Exception as e:
             self._send_json(502, {"error": f"Failed to reach upstream LLM: {str(e)}"})

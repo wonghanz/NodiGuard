@@ -80,5 +80,51 @@ class TestNodiProxy(unittest.TestCase):
         self.assertEqual(data_err.get("code"), "upstream_redirect_blocked")
         self.assertIn("verified-project.com", data_err.get("target_location"))
 
+    @patch("nodiguard.proxy.requests.post")
+    def test_failover_when_upstream_edge_fails(self, mock_post):
+        # First call (primary upstream) returns 502 Bad Gateway
+        resp_502 = MagicMock()
+        resp_502.is_redirect = False
+        resp_502.status_code = 502
+        resp_502.headers = {"Content-Type": "text/html"}
+
+        # Second call (fallback) returns 200 OK with valid JSON
+        resp_ok = MagicMock()
+        resp_ok.is_redirect = False
+        resp_ok.status_code = 200
+        resp_ok.headers = {"Content-Type": "application/json"}
+        resp_ok.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "Paris is the capital."}}]
+        }
+
+        mock_post.side_effect = [resp_502, resp_ok]
+
+        # Enable fallback URL
+        import os
+        os.environ["FALLBACK_BASE_URL"] = "http://192.168.0.188:8090"
+
+        url = f"http://127.0.0.1:{self.test_port}/v1/chat/completions"
+        payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "What is the capital of France?"}
+            ]
+        }
+        import urllib.request
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req) as resp:
+            status = resp.status
+            data = json.loads(resp.read().decode("utf-8"))
+
+        del os.environ["FALLBACK_BASE_URL"]
+
+        self.assertEqual(status, 200)
+        self.assertIn("choices", data)
+        self.assertIn("Paris", data["choices"][0]["message"]["content"])
+
 if __name__ == "__main__":
     unittest.main()
