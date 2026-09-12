@@ -2,6 +2,8 @@
 
 <div align="center">
 
+![NodiGuard Banner](nodiguard_social_card.png)
+
 ```
  _   _           _ _  ____                     _ 
 | \ | | ___   __| (_)/ ___|_   _  __ _ _ __ __| |
