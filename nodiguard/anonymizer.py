@@ -73,3 +73,15 @@ class TokenAnonymizer:
         for placeholder, original in mapping.items():
             restored = restored.replace(placeholder, original)
         return restored
+
+    @classmethod
+    def mask_ip_for_logs(cls, text: str) -> str:
+        """
+        Masks any IPv4 address in console logs or diagnostics to enforce Zero-IP exposure.
+        Example: 'Failing over to http://192.168.0.188:8090' -> 'Failing over to http://[SECURE_NODE]:8090'
+        """
+        if not text:
+            return ""
+        ipv4_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+        return re.sub(ipv4_pattern, "[SECURE_NODE]", text)
+

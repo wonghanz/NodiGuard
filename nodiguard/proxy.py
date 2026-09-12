@@ -21,11 +21,13 @@ from typing import Dict, Any, Optional
 from .dlp import NodiGuardDLP
 from .anonymizer import TokenAnonymizer
 from .optimizer import SystemOptimizer
+from .waf_enforcer import CloudflareWAFEnforcer
 
 class NodiProxyHandler(BaseHTTPRequestHandler):
     dlp = NodiGuardDLP()
     anonymizer = TokenAnonymizer()
     optimizer = SystemOptimizer()
+    waf = CloudflareWAFEnforcer()
 
     def _send_json(self, status_code: int, data: Dict[str, Any]):
         body = json.dumps(data).encode("utf-8")
@@ -67,6 +69,50 @@ class NodiProxyHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Not Found"})
 
     def do_POST(self):
+        client_ip = self.headers.get("CF-Connecting-IP") or self.headers.get("X-Forwarded-For") or (self.client_address[0] if self.client_address else "127.0.0.1")
+
+        # 0. Check if client IP is quarantined
+        if self.waf.is_banned(client_ip):
+            self._send_json(403, {
+                "error": {
+                    "message": "[NODIGUARD WAF]: Access Denied. Your IP has been permanently blacklisted for security violations.",
+                    "type": "access_denied",
+                    "code": "ip_blacklisted"
+                }
+            })
+            return
+
+        # 1. Handle Mobile / Web App Tamper Alert (RASP Threat Signal)
+        if self.path == "/api/security/tamper-alert":
+            content_length = int(self.headers.get("Content-Length", 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                alert_data = json.loads(post_data.decode("utf-8"))
+            except Exception:
+                alert_data = {}
+            reason = alert_data.get("reason", "Mobile App Decompilation / Frida Hook Detected")
+            self.waf.ban_ip(client_ip, reason=reason)
+            masked_ip = self.anonymizer.mask_ip_for_logs(client_ip)
+            print(f"[!] [NODIGUARD RASP ALERT] Decompilation/Tamper detected from {masked_ip}: {reason}. Banning IP...")
+            self._send_json(200, {"status": "quarantined", "action": "ip_banned"})
+            return
+
+        # 2. Check for Honey-Token Reconnaissance Traps
+        auth_header = self.headers.get("Authorization", "")
+        if "honey" in auth_header.lower() or "canary" in auth_header.lower():
+            # 100% Attacker Reconnaissance Triggered
+            self.waf.ban_ip(client_ip, reason="Honey-Token Trap Triggered by Reverse Engineering")
+            masked_ip = self.anonymizer.mask_ip_for_logs(client_ip)
+            print(f"[!] [NODIGUARD HONEYPOT] Attacker {masked_ip} triggered Honey-Token trap! Dispatching Cloudflare ban...")
+            self._send_json(403, {
+                "error": {
+                    "message": "[SECURITY ALERT] Unauthorized Canary Token detected. Your IP has been permanently blacklisted.",
+                    "type": "security_violation",
+                    "code": "honeytoken_triggered"
+                }
+            })
+            return
+
         if not self.path.startswith("/v1/chat/completions"):
             self._send_json(404, {"error": "Endpoint not supported. Use /v1/chat/completions"})
             return
@@ -159,7 +205,8 @@ class NodiProxyHandler(BaseHTTPRequestHandler):
 
         # 2. Seamless Failover to Fallback Node if primary failed
         if not success and fallback_url:
-            print(f"[*] [NODIGUARD FAILOVER] Primary ({upstream_url}) failed: {reason}. Failing over to {fallback_url}...")
+            masked_fb = self.anonymizer.mask_ip_for_logs(fallback_url)
+            print(f"[*] [NODIGUARD FAILOVER] Primary ({upstream_url}) failed: {reason}. Failing over to {masked_fb}...")
             try:
                 fb_success, fb_resp, fb_reason, fb_code, _ = _forward_call(fallback_url)
                 if fb_success:

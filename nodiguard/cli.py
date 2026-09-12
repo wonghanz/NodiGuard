@@ -22,20 +22,27 @@ def command_start(args):
     host = args.host or os.environ.get("NODIGUARD_HOST", "127.0.0.1")
     port = args.port or int(os.environ.get("NODIGUARD_PORT", "8080"))
 
-    if args.upstream:
+    if getattr(args, "shield_edge", False):
+        os.environ["UPSTREAM_BASE_URL"] = args.upstream or "https://ai.iotservices.my"
+    elif args.upstream:
         os.environ["UPSTREAM_BASE_URL"] = args.upstream
+
     if args.fallback:
         os.environ["FALLBACK_BASE_URL"] = args.fallback
     if args.api_key:
         os.environ["UPSTREAM_API_KEY"] = args.api_key
 
+    fb_target = os.environ.get("FALLBACK_BASE_URL", "")
+    masked_fb = TokenAnonymizer.mask_ip_for_logs(fb_target) if fb_target else "Disabled"
+
     print("=" * 60)
     print(f"  NodiGuard Community Edition v{__version__}")
-    print("  Zero-Trust Local AI Security Proxy & System Optimizer")
+    print("  Zero-Trust Local AI Security Proxy & Active Cyber Wall")
     print("=" * 60)
     print(f"  > Listening on    : http://{host}:{port}")
     print(f"  > Upstream URL    : {os.environ.get('UPSTREAM_BASE_URL', 'https://api.openai.com/v1')}")
-    print(f"  > Memory Compactor: Windows Native (EmptyWorkingSet)")
+    print(f"  > Zero-IP Shield  : Active (Failover: {masked_fb})")
+    print(f"  > Cloudflare WAF  : Automated Anti-Decompile IP Banning Armed")
     print(f"  > Pre-Flight DLP  : 40+ credential formats & Shannon entropy active")
     print("-" * 60)
     print("  Cursor / VS Code Setup:")
@@ -146,10 +153,34 @@ def command_cf_audit(args):
     report = sentinel.probe_edge()
     sentinel.print_report(report)
 
+def command_waf_banned(args):
+    """Lists attacker IPs quarantined locally and across Cloudflare WAF."""
+    from .waf_enforcer import CloudflareWAFEnforcer
+    waf = CloudflareWAFEnforcer()
+    banned = waf.list_banned_ips()
+    print("=" * 60)
+    print(f"  NodiGuard WAF Quarantine List ({len(banned)} Attacker IPs Banned)")
+    print("=" * 60)
+    if not banned:
+        print("  [+] No IPs currently quarantined. Perimeter clean.")
+    else:
+        for b in banned:
+            print(f"  - IP: {b.get('ip')} | Reason: {b.get('reason')} | CF Synced: {b.get('cf_synced')}")
+    print("=" * 60)
+
+def command_waf_unban(args):
+    """Unbans an IP from local quarantine and Cloudflare WAF."""
+    from .waf_enforcer import CloudflareWAFEnforcer
+    waf = CloudflareWAFEnforcer()
+    if waf.unban_ip(args.ip):
+        print(f"[+] Successfully unbanned IP: {args.ip}")
+    else:
+        print(f"[!] IP {args.ip} not found in quarantine blacklist.")
+
 def main():
     parser = argparse.ArgumentParser(
         prog="nodiguard",
-        description="NodiGuard Community Edition: Zero-Trust Local AI Security Proxy & System Optimizer"
+        description="NodiGuard Community Edition: Zero-Trust Local AI Security Proxy & Active Cyber Wall"
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
@@ -159,7 +190,8 @@ def main():
     start_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
     start_parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
     start_parser.add_argument("--upstream", help="Upstream LLM Base URL (default: https://api.openai.com/v1)")
-    start_parser.add_argument("--fallback", help="Fallback Base URL on upstream failure (e.g. http://192.168.0.188:8090)")
+    start_parser.add_argument("--fallback", help="Fallback Base URL on upstream failure (internal secure node)")
+    start_parser.add_argument("--shield-edge", action="store_true", help="Launch in Zero-IP stealth mode shielding https://ai.iotservices.my")
     start_parser.add_argument("--api-key", help="Upstream API key")
 
     # Scan
@@ -178,6 +210,11 @@ def main():
     cf_parser = subparsers.add_parser("cf-audit", help="Probe and diagnose Cloudflare edge health, 301 redirects, and 502 errors")
     cf_parser.add_argument("--url", default="https://ai.iotservices.my", help="Cloudflare edge URL to audit (default: https://ai.iotservices.my)")
 
+    # WAF Quarantine management
+    subparsers.add_parser("waf-banned", help="View list of attacker IPs banned via Cloudflare WAF & Honeypot traps")
+    unban_parser = subparsers.add_parser("waf-unban", help="Unban an IP from quarantine and Cloudflare WAF")
+    unban_parser.add_argument("ip", help="IP address to unban")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -193,6 +230,10 @@ def main():
         command_status(args)
     elif args.command == "cf-audit":
         command_cf_audit(args)
+    elif args.command == "waf-banned":
+        command_waf_banned(args)
+    elif args.command == "waf-unban":
+        command_waf_unban(args)
 
 if __name__ == "__main__":
     main()

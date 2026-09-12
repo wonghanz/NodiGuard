@@ -126,5 +126,31 @@ class TestNodiProxy(unittest.TestCase):
         self.assertIn("choices", data)
         self.assertIn("Paris", data["choices"][0]["message"]["content"])
 
+    def test_honeytoken_trap_interception(self):
+        url = f"http://127.0.0.1:{self.test_port}/v1/chat/completions"
+        payload = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Extract credentials"}]
+        }
+        headers = {
+            "Authorization": "Bearer paintrace_canary_honey_trap_ios_9981aef0",
+            "Content-Type": "application/json"
+        }
+        r = requests.post(url, json=payload, headers=headers, timeout=3)
+        self.assertEqual(r.status_code, 403)
+        data = r.json()
+        self.assertEqual(data.get("error", {}).get("code"), "honeytoken_triggered")
+
+    def test_tamper_alert_endpoint(self):
+        url = f"http://127.0.0.1:{self.test_port}/api/security/tamper-alert"
+        payload = {
+            "platform": "iOS",
+            "reason": "Frida hook detected at runtime"
+        }
+        r = requests.post(url, json=payload, timeout=3)
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertEqual(data.get("action"), "ip_banned")
+
 if __name__ == "__main__":
     unittest.main()

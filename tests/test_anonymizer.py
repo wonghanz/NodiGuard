@@ -34,5 +34,13 @@ class TestTokenAnonymizer(unittest.TestCase):
         restored = self.anonymizer.de_anonymize(anonymized, mapping)
         self.assertEqual(restored, raw)
 
+    def test_mask_ip_for_logs(self):
+        log_msg = "Routing traffic to 192.168.0.188:8090 via 10.0.0.1 and 172.16.1.5"
+        masked = TokenAnonymizer.mask_ip_for_logs(log_msg)
+        self.assertNotIn("192.168.0.188", masked)
+        self.assertNotIn("10.0.0.1", masked)
+        self.assertNotIn("172.16.1.5", masked)
+        self.assertIn("[SECURE_NODE]", masked)
+
 if __name__ == "__main__":
     unittest.main()
