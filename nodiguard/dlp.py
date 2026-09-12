@@ -42,6 +42,8 @@ class NodiGuardDLP:
         ("Square Access Token", r"sq0atp-[0-9A-Za-z\-_]{22}"),
         ("Twilio Account SID", r"AC[a-zA-Z0-9]{32}"),
         ("Mailgun API Key", r"key-[0-9a-zA-Z]{32}"),
+        ("Cloudflare Global API Key", r"(?i)cloudflare[_-]?(?:api[_-]?key|auth[_-]?key)\s*[:=]\s*['\"][a-f0-9]{37}['\"]"),
+        ("Cloudflare API Token", r"(?i)cloudflare[_-]?token\s*[:=]\s*['\"][a-zA-Z0-9_\-]{40}['\"]"),
     ]
 
     # Insecure "Vibe Coding" MVP Patterns

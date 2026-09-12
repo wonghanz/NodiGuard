@@ -44,5 +44,12 @@ def run_app():
         self.assertTrue(res.is_safe)
         self.assertEqual(len(res.findings), 0)
 
+    def test_cloudflare_credential_detection(self):
+        # Synthetic mock Cloudflare token (non-functional testing pattern)
+        prompt = "Set my cloudflare_token = 'abcdefghijklmnopqrstuvwxyz0123456789-_ab' in config"
+        res = self.dlp.inspect_prompt(prompt)
+        self.assertFalse(res.is_safe)
+        self.assertTrue(any("Cloudflare" in f.description for f in res.findings))
+
 if __name__ == "__main__":
     unittest.main()

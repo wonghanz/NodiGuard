@@ -126,12 +126,41 @@ class NodiProxyHandler(BaseHTTPRequestHandler):
         }
 
         try:
+            # ZERO BLIND FOLLOW: Set allow_redirects=False to prevent prompt/token exfiltration on 30x hijacks
             resp = requests.post(
                 f"{upstream_url}/chat/completions",
                 json=payload,
                 headers=headers,
-                timeout=60
+                timeout=60,
+                allow_redirects=False
             )
+
+            # Detect and neutralize suspicious 30x redirect hijacking
+            if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+                redirect_target = resp.headers.get("Location", "unknown")
+                self._send_json(502, {
+                    "error": {
+                        "message": f"[NODIGUARD HIJACK SHIELD]: Upstream returned HTTP {resp.status_code} redirecting to '{redirect_target}'. Request blocked to prevent unauthorized prompt/token exfiltration.",
+                        "type": "security_violation",
+                        "code": "upstream_redirect_blocked",
+                        "target_location": redirect_target
+                    }
+                })
+                return
+
+            # Validate upstream content type: catch Cloudflare edge HTML error/redirect pages
+            content_type = resp.headers.get("Content-Type", "")
+            if "application/json" not in content_type:
+                self._send_json(502, {
+                    "error": {
+                        "message": f"[NODIGUARD GATEWAY ERROR]: Upstream returned non-JSON response ('{content_type}'). Possible CDN edge error or unverified landing page.",
+                        "type": "upstream_protocol_error",
+                        "code": "non_json_upstream_response",
+                        "status_code": resp.status_code
+                    }
+                })
+                return
+
             resp_data = resp.json()
         except Exception as e:
             self._send_json(502, {"error": f"Failed to reach upstream LLM: {str(e)}"})
